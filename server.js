@@ -23,18 +23,20 @@ const MONGO_URI      = process.env.MONGO_URI       || 'mongodb://localhost:27017
 const ADMIN_USERNAME = (process.env.ADMIN_USERNAME ?? 'admin').trim();
 const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD ?? 'admin1234').trim();
 
-/** Comma-separated origins from env, plus any http://localhost:* / 127.0.0.1:* for dev. */
+/** Always allowed production frontend (apex); merge with comma-separated ALLOWED_ORIGIN from env. */
+const STATIC_ALLOWED_ORIGINS = ['https://coinora.in'];
 const envOrigins = (process.env.ALLOWED_ORIGIN || 'http://localhost:3000')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+const allowedOrigins = [...new Set([...STATIC_ALLOWED_ORIGINS, ...envOrigins])];
 
 const isLocalDevOrigin = (origin) =>
   /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin || '');
 
 const corsOrigin = (origin, callback) => {
   if (!origin) return callback(null, true);
-  if (envOrigins.includes(origin) || isLocalDevOrigin(origin)) {
+  if (allowedOrigins.includes(origin) || isLocalDevOrigin(origin)) {
     return callback(null, origin);
   }
   callback(null, false);
