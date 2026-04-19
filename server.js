@@ -18,8 +18,7 @@ const {
 } = require('./indemnityPayload');
 
 const app = express();
-
-const PORT           = process.env.PORT            || 5001;
+const PORT = process.env.PORT || 5000;
 const MONGO_URI      = process.env.MONGO_URI       || 'mongodb://localhost:27017/kyc_db';
 const ADMIN_USERNAME = (process.env.ADMIN_USERNAME ?? 'admin').trim();
 const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD ?? 'admin1234').trim();
@@ -72,9 +71,7 @@ mongoose
   .then(async () => {
     console.log('MongoDB database is connected.');
     await dropObsoleteUserIndexes();
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server running on port ${PORT}`);
-    });
+    app.listen(PORT, () => console.log(`Server running on ${PORT}`));
   })
   .catch((err) => {
     console.error('MongoDB connection error:', err.message);
