@@ -66,6 +66,10 @@ app.use(express.urlencoded({ extended: true, limit: '20kb' }));
 
 app.use('/storage', express.static(STORAGE_ROOT));
 
+app.get('/', (req, res) => {
+  res.send('Backend is running 🚀');
+});
+
 mongoose
   .connect(MONGO_URI)
   .then(async () => {
