@@ -2,117 +2,12 @@ const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 
-const COMPANY = {
-  name: 'COINORA VDASP PRIVATE LIMITED',
-  cin: 'U66190MH2025PTC451704',
-  phone: '+91- 9136500665',
-  email: 'akash93282@gmail.com',
-  address:
-    'Gala No. 20, Raviraj Industrial Estate, Bhayander East, Thane, Maharashtra, India, 401105'
-};
-
-const ROYAL_BLUE   = '#0047AB';
-const HEADER_CORAL = '#FF5E5E';
-const FOOTER_RED   = '#FF3131';
-
-const TOP_BLUE_BAR_H  = 24;
-const HEADER_BOTTOM_Y = 110; // content starts here on page 1 (below header + 20pt company name)
-const FOOTER_BAR_H    = 20;
-const FOOTER_H        = 118; // total height reserved for footer at page bottom
-
-/** Header drawn only on page 1 — exact match to Letter Head_Coinora.pdf */
-function drawFirstPageHeader(doc) {
-  const pageW = doc.page.width;
-  doc.save();
-
-  // Full-width royal blue top bar
-  doc.rect(0, 0, pageW, TOP_BLUE_BAR_H).fill(ROYAL_BLUE);
-
-  // Coral triangle — wide at the top edge (~220pt), narrows diagonally to the
-  // right edge at the bottom, matching the letterhead's top-right sweep shape.
-  doc
-    .path(
-      `M ${pageW - 220} 0 ` +
-      `L ${pageW} 0 ` +
-      `L ${pageW} ${TOP_BLUE_BAR_H + 78} Z`
-    )
-    .fill(HEADER_CORAL);
-
-  // Company name — 22px left margin (matches letterhead's near-edge placement)
-  doc
-    .fontSize(20)
-    .font('Helvetica-Bold')
-    .fillColor('#000000')
-    .text(COMPANY.name, 22, TOP_BLUE_BAR_H + 12, {
-      width: pageW - 22 - 240,
-      align: 'left'
-    });
-
-  doc.restore();
-}
-
-function drawPhoneIcon(doc, cx, cy) {
-  doc.save();
-  doc.circle(cx, cy, 7.5).fill('#111827');
-  doc.strokeColor('#ffffff').lineWidth(1.1);
-  doc.moveTo(cx - 2.5, cy - 3).quadraticCurveTo(cx + 3, cy - 1, cx + 2, cy + 4).stroke();
-  doc.restore();
-}
-
-function drawMailIcon(doc, cx, cy) {
-  doc.save();
-  doc.circle(cx, cy, 7.5).fill('#111827');
-  doc.strokeColor('#ffffff').lineWidth(0.9);
-  doc.moveTo(cx - 4, cy).lineTo(cx + 4, cy - 2).lineTo(cx + 4, cy + 2).lineTo(cx - 4, cy + 2).closePath().stroke();
-  doc.moveTo(cx - 4, cy - 2).lineTo(cx + 4, cy).stroke();
-  doc.restore();
-}
-
-/** Footer drawn on EVERY page — rule, CIN, phone+email, address, blue bar, red corner. */
-function drawPageFooter(doc) {
-  const pageW    = doc.page.width;
-  const pageH    = doc.page.height;
-  const footerTop = pageH - FOOTER_H;
-  const marginX  = 30;
-  const innerW   = pageW - marginX * 2;
-
-  doc.save();
-
-  // Rule line — near full-width matching letterhead
-  doc.moveTo(marginX, footerTop).lineTo(pageW - marginX, footerTop)
-    .strokeColor('#111827').lineWidth(0.7).stroke();
-
-  let ty = footerTop + 10;
-  doc.fontSize(10).font('Helvetica-Bold').fillColor('#111827')
-    .text(`CIN : ${COMPANY.cin}`, marginX, ty, { width: innerW, align: 'center' });
-  ty += 18;
-
-  const phoneStr = COMPANY.phone;
-  const emailStr = COMPANY.email;
-  doc.fontSize(8.5).font('Helvetica').fillColor('#1f2937');
-  const phoneW  = doc.widthOfString(phoneStr);
-  const gap     = 36;
-  const iconPad = 20;
-  const emailW  = doc.widthOfString(emailStr);
-  const blockW  = iconPad + phoneW + gap + iconPad + emailW;
-  const startX  = (pageW - blockW) / 2;
-
-  drawPhoneIcon(doc, startX + 7.5, ty + 5);
-  doc.text(phoneStr, startX + iconPad, ty, { lineBreak: false });
-  const emailStart = startX + iconPad + phoneW + gap;
-  drawMailIcon(doc, emailStart + 7.5, ty + 5);
-  doc.text(emailStr, emailStart + iconPad, ty, { lineBreak: false });
-  ty += 16;
-
-  doc.fontSize(8.5).font('Helvetica-Bold').fillColor('#1f2937')
-    .text(COMPANY.address, marginX, ty, { width: innerW, align: 'center', lineGap: 2 });
-
-  doc.rect(0, pageH - FOOTER_BAR_H, pageW, FOOTER_BAR_H).fill(ROYAL_BLUE);
-  // Red corner triangle — 58pt tall × 72pt wide, matches letterhead exactly
-  doc.path(`M 0 ${pageH - 70} L 84 ${pageH} L 0 ${pageH} Z`).fill(FOOTER_RED);
-
-  doc.restore();
-}
+const {
+  drawPageHeader,
+  drawPageFooter,
+  HEADER_BOTTOM_Y,
+  maxBodyY,
+} = require('./pdfLetterhead');
 
 function safe(v) {
   if (v === undefined || v === null) return '';
@@ -167,15 +62,13 @@ const generateKycPDF = (user) => {
         value:  '#1e293b'
       };
 
-      // Bottom boundary content must not cross (reserves footer space on every page)
-      const maxContentY = PAGE_H - FOOTER_H - 20;
+      const maxContentY = maxBodyY(PAGE_H);
 
-      // Called when the main-content section overflows to a new page.
-      // Non-first pages have no header so content starts at MARGIN.
+      // New pages use the same header band; body starts below letterhead.
       const addContentPage = () => {
         doc.addPage();
         doc.x = MARGIN;
-        doc.y = MARGIN;
+        doc.y = HEADER_BOTTOM_Y;
       };
 
       // ── Helper renderers ──────────────────────────────────────────────────────
@@ -202,12 +95,19 @@ const generateKycPDF = (user) => {
       };
 
       const paraBlock = (title, text) => {
-        if (doc.y > maxContentY - 50) addContentPage();
+        const body = safe(text);
+        doc.fontSize(8).font('Helvetica-Bold');
+        const hTitle = doc.heightOfString(title, { width: INNER });
+        doc.font('Helvetica').fontSize(8);
+        const hBody = doc.heightOfString(body, { width: INNER });
+        const total =
+          hTitle + doc.currentLineHeight() * 0.35 + hBody + doc.currentLineHeight() * 0.9;
+        if (doc.y + total > maxContentY) addContentPage();
         doc.fontSize(8).font('Helvetica-Bold').fillColor('#475569')
           .text(title, MARGIN, doc.y, { width: INNER });
         doc.moveDown(0.35);
         doc.font('Helvetica').fontSize(8).fillColor('#334155')
-          .text(safe(text), MARGIN, doc.y, { width: INNER });
+          .text(body, MARGIN, doc.y, { width: INNER });
         doc.moveDown(0.9);
       };
 
@@ -267,10 +167,9 @@ const generateKycPDF = (user) => {
       ].filter(([, p]) => isUsableImageFile(p));
 
       for (const [title, imgPath] of annexSlots) {
-        // Each annex always starts on its own fresh page
         doc.addPage();
         doc.x = MARGIN;
-        doc.y = MARGIN;
+        doc.y = HEADER_BOTTOM_Y;
 
         // Section strip
         const stripY = doc.y;
@@ -296,11 +195,11 @@ const generateKycPDF = (user) => {
         }
       }
 
-      // ── Apply header (page 1 only) + footer (every page) ─────────────────────
+      // ── Letterhead: same header + footer on every page ───────────────────────
       const range = doc.bufferedPageRange();
       for (let i = range.start; i < range.start + range.count; i++) {
         doc.switchToPage(i);
-        if (i === range.start) drawFirstPageHeader(doc);
+        drawPageHeader(doc);
         drawPageFooter(doc);
       }
 

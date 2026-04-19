@@ -2,6 +2,13 @@ const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 
+const {
+  drawPageHeader,
+  drawPageFooter,
+  HEADER_BOTTOM_Y,
+  maxBodyY,
+} = require('./pdfLetterhead');
+
 const safe = (v) => (v === undefined || v === null || String(v).trim() === '') ? '—' : String(v).trim();
 
 const generateIndemnityPDF = (data, bondId) => {
@@ -11,7 +18,7 @@ const generateIndemnityPDF = (data, bondId) => {
       const pdfPath = path.join(pdfDir, `${bondId}.pdf`);
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
 
-      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
       const stream = fs.createWriteStream(pdfPath);
       doc.pipe(stream);
 
@@ -19,27 +26,30 @@ const generateIndemnityPDF = (data, bondId) => {
       const PAGE_H = doc.page.height;
       const M = 50;
       const W = PAGE_W - M * 2;
-      const maxY = PAGE_H - M - 20;
+      const maxY = maxBodyY(PAGE_H);
       const BLK = '#111827';
       const GRAY_NUM = '#9ca3af';
-      /** Filled / highlight values (amber, like marked fields in the source document). */
-      const DYNAMIC_TEXT = '#b45309';
+      /** Body paragraphs and filled fields: Helvetica regular. Bold reserved for main/section titles only. */
+      const BODY_LINE_GAP = 2;
 
       const addPage = () => {
         doc.addPage();
         doc.x = M;
-        doc.y = M;
+        doc.y = HEADER_BOTTOM_Y;
       };
 
-      const checkY = (needed = 40) => {
-        if (doc.y + needed > maxY) addPage();
-      };
+      const tailAfterBlock = (gapLines) => doc.currentLineHeight() * gapLines;
 
-      // Section header: small gray number + bold title + rule
+      // Section header: gray bold number + bold title + rule; body text uses `para` / `inline` (regular).
       const sectionHeader = (num, title) => {
-        checkY(55);
+        doc.fontSize(12).font('Helvetica-Bold');
+        const hTitle = doc.heightOfString(title, { width: W - 38 });
+        doc.fontSize(10).font('Helvetica-Bold');
+        const hNum = doc.heightOfString(num, { width: 30, align: 'right' });
+        const blockH = Math.max(hNum, hTitle) + 18;
+        if (doc.y + blockH > maxY) addPage();
         const y = doc.y;
-        doc.fontSize(10).font('Helvetica').fillColor(GRAY_NUM)
+        doc.fontSize(10).font('Helvetica-Bold').fillColor(GRAY_NUM)
           .text(num, M, y, { width: 30, align: 'right' });
         doc.fontSize(12).font('Helvetica-Bold').fillColor(BLK)
           .text(title, M + 38, y, { width: W - 38 });
@@ -49,48 +59,37 @@ const generateIndemnityPDF = (data, bondId) => {
         doc.y = ruleY + 10;
       };
 
-      // Bold paragraph (all body text is bold to match the original doc)
       const para = (text, gap = 0.7) => {
-        checkY(30);
-        doc.fontSize(11).font('Helvetica-Bold').fillColor(BLK)
-          .text(text, M, doc.y, { width: W, align: 'justify', lineGap: 2 });
+        doc.fontSize(11).font('Helvetica');
+        const h = doc.heightOfString(text, { width: W, align: 'justify', lineGap: BODY_LINE_GAP });
+        if (doc.y + h + tailAfterBlock(gap) > maxY) addPage();
+        doc.fillColor(BLK)
+          .text(text, M, doc.y, { width: W, align: 'justify', lineGap: BODY_LINE_GAP });
         doc.moveDown(gap);
       };
 
-      // Bullet point
       const bullet = (text, gap = 0.35) => {
-        checkY(22);
-        doc.fontSize(11).font('Helvetica-Bold').fillColor(BLK)
-          .text(`\u2022 ${text}`, M, doc.y, { width: W, align: 'justify', lineGap: 2 });
+        const line = `\u2022 ${text}`;
+        doc.fontSize(11).font('Helvetica');
+        const h = doc.heightOfString(line, { width: W, align: 'justify', lineGap: BODY_LINE_GAP });
+        if (doc.y + h + tailAfterBlock(gap) > maxY) addPage();
+        doc.fillColor(BLK)
+          .text(line, M, doc.y, { width: W, align: 'justify', lineGap: BODY_LINE_GAP });
         doc.moveDown(gap);
       };
 
-      // Star bullet
-      const star = (text, gap = 0.35) => {
-        checkY(22);
-        doc.fontSize(11).font('Helvetica-Bold').fillColor(BLK)
-          .text(`* ${text}`, M, doc.y, { width: W, align: 'justify', lineGap: 2 });
-        doc.moveDown(gap);
-      };
-
-      // Dash item
-      const dash = (text, gap = 0.3) => {
-        checkY(20);
-        doc.fontSize(11).font('Helvetica-Bold').fillColor(BLK)
-          .text(`\u2013 ${text}`, M + 10, doc.y, { width: W - 10, align: 'justify', lineGap: 2 });
-        doc.moveDown(gap);
-      };
-
-      // Mixed inline paragraph: [{text, dyn}]
-      const inline = (segments, gap = 0.7) => {
-        checkY(30);
+      const bulletInline = (segments, gap = 0.35) => {
+        const parts = [{ text: '\u2022 ', dyn: false }, ...segments];
+        const plain = parts.map((s) => s.text).join('');
+        doc.fontSize(11).font('Helvetica');
+        const h = doc.heightOfString(plain, { width: W, align: 'justify', lineGap: BODY_LINE_GAP });
+        if (doc.y + h + tailAfterBlock(gap) > maxY) addPage();
         const startY = doc.y;
-        doc.fontSize(11).font('Helvetica-Bold');
-        for (let i = 0; i < segments.length; i++) {
-          const seg = segments[i];
-          const last = i === segments.length - 1;
-          doc.fillColor(seg.dyn ? DYNAMIC_TEXT : BLK);
-          const opts = { width: W, align: 'justify', lineGap: 2, continued: !last };
+        for (let i = 0; i < parts.length; i++) {
+          const seg = parts[i];
+          const last = i === parts.length - 1;
+          doc.font('Helvetica').fillColor(BLK);
+          const opts = { width: W, align: 'justify', lineGap: BODY_LINE_GAP, continued: !last };
           if (i === 0) doc.text(seg.text, M, startY, opts);
           else doc.text(seg.text, opts);
         }
@@ -98,19 +97,57 @@ const generateIndemnityPDF = (data, bondId) => {
         doc.moveDown(gap);
       };
 
-      // Sub-label (e.g. "INDEMNITY HOLDER" subheading)
+      const star = (text, gap = 0.35) => {
+        const line = `* ${text}`;
+        doc.fontSize(11).font('Helvetica');
+        const h = doc.heightOfString(line, { width: W, align: 'justify', lineGap: BODY_LINE_GAP });
+        if (doc.y + h + tailAfterBlock(gap) > maxY) addPage();
+        doc.fillColor(BLK)
+          .text(line, M, doc.y, { width: W, align: 'justify', lineGap: BODY_LINE_GAP });
+        doc.moveDown(gap);
+      };
+
+      const dash = (text, gap = 0.3) => {
+        const line = `\u2013 ${text}`;
+        doc.fontSize(11).font('Helvetica');
+        const h = doc.heightOfString(line, { width: W - 10, align: 'justify', lineGap: BODY_LINE_GAP });
+        if (doc.y + h + tailAfterBlock(gap) > maxY) addPage();
+        doc.fillColor(BLK)
+          .text(line, M + 10, doc.y, { width: W - 10, align: 'justify', lineGap: BODY_LINE_GAP });
+        doc.moveDown(gap);
+      };
+
+      const inline = (segments, gap = 0.7) => {
+        const plain = segments.map((s) => s.text).join('');
+        doc.fontSize(11).font('Helvetica');
+        const h = doc.heightOfString(plain, { width: W, align: 'justify', lineGap: BODY_LINE_GAP });
+        if (doc.y + h + tailAfterBlock(gap) > maxY) addPage();
+        const startY = doc.y;
+        for (let i = 0; i < segments.length; i++) {
+          const seg = segments[i];
+          const last = i === segments.length - 1;
+          doc.font('Helvetica').fillColor(BLK);
+          const opts = { width: W, align: 'justify', lineGap: BODY_LINE_GAP, continued: !last };
+          if (i === 0) doc.text(seg.text, M, startY, opts);
+          else doc.text(seg.text, opts);
+        }
+        doc.fillColor(BLK);
+        doc.moveDown(gap);
+      };
+
       const subHead = (text) => {
-        checkY(22);
-        doc.fontSize(11).font('Helvetica-Bold').fillColor(BLK)
+        doc.fontSize(11).font('Helvetica-Bold');
+        const h = doc.heightOfString(text, { width: W });
+        if (doc.y + h + tailAfterBlock(0.25) > maxY) addPage();
+        doc.fillColor(BLK)
           .text(text, M, doc.y, { width: W });
         doc.moveDown(0.25);
       };
 
-      // ── PAGE 1 (no letterhead / footer — bond only) ────────────────────────
+      // Body is laid out below the letterhead band; header/footer drawn after buffering.
       doc.x = M;
-      doc.y = M;
+      doc.y = HEADER_BOTTOM_Y;
 
-      // Main title
       doc.fontSize(24).font('Helvetica-Bold').fillColor(BLK)
         .text('INDEMNITY BOND', M, doc.y, { width: W, align: 'center' });
       doc.moveDown(1.5);
@@ -179,10 +216,18 @@ const generateIndemnityPDF = (data, bondId) => {
       doc.moveDown(0.4);
       para('The Indemnifier expressly, irrevocably, and unconditionally admits, acknowledges, and agrees that for the purposes of this transaction:');
       bullet('the Indemnifier is the Buyer, who has voluntarily purchased / acquired Virtual Digital Assets (VDA) through the KuCoin Exchange \u2013 P2P mechanism; and');
-      bullet(`the Seller / Indemnity Holder is ${safe(data.holderName)}, acting solely in the capacity of Seller on KuCoin P2P.`);
+      bulletInline([
+        { text: 'the Seller / Indemnity Holder is ', dyn: false },
+        { text: safe(data.holderName), dyn: true },
+        { text: ', acting solely in the capacity of Seller on KuCoin P2P.', dyn: false },
+      ]);
       para('The Indemnifier categorically agrees and undertakes that the Indemnifier shall never, at any time whatsoever, directly or indirectly, challenge, dispute, deny, recharacterize, or question:');
       bullet('the role, status, or capacity of the Indemnifier as Buyer;');
-      bullet(`the role, status, or capacity of ${safe(data.holderName)} as Seller / Indemnity Holder;`);
+      bulletInline([
+        { text: 'the role, status, or capacity of ', dyn: false },
+        { text: safe(data.holderName), dyn: true },
+        { text: ' as Seller / Indemnity Holder;', dyn: false },
+      ]);
       bullet('the nature of the transaction as a VDA sale / purchase executed through KuCoin P2P;');
       bullet('the platform-based execution, order flow, or designation of buyer and seller as reflected in KuCoin records, order ID, chat logs, transaction logs, or platform data.');
       para('The Indemnifier further irrevocably waives any right to allege or contend that:');
@@ -225,11 +270,19 @@ const generateIndemnityPDF = (data, bondId) => {
       inline([{ text: '\u2022 District Name: ' }, { text: safe(data.districtName), dyn: true }]);
       inline([{ text: '\u2022 Stamp Duty Paid By: ' }, { text: safe(data.stampDutyPaidBy), dyn: true }]);
       para('\u2022 Purpose of Stamp Duty Paid: Execution of Indemnity Bond');
-      bullet(`First Party Name: ${safe(data.holderName)} (Indemnity Holder / Seller)`);
+      bulletInline([
+        { text: 'First Party Name: ', dyn: false },
+        { text: safe(data.holderName), dyn: true },
+        { text: ' (Indemnity Holder / Seller)', dyn: false },
+      ]);
       inline([{ text: '\u2022 Second Party Name: ' }, { text: safe(data.indemnifierName), dyn: true }, { text: '  (Indemnifier / Buyer)' }]);
       inline([{ text: '\u2022 GRN Number: ' }, { text: safe(data.grnNumber), dyn: true }]);
       para('The Indemnifier expressly admits and agrees that:');
-      bullet(`the First Party is ${safe(data.holderName)}, acting as Seller and Indemnity Holder;`);
+      bulletInline([
+        { text: 'the First Party is ', dyn: false },
+        { text: safe(data.holderName), dyn: true },
+        { text: ', acting as Seller and Indemnity Holder;', dyn: false },
+      ]);
       bullet('the Second Party is the Indemnifier, acting as Buyer;');
       bullet('the e-Stamp paper has been lawfully purchased, duly paid, and correctly utilized for execution of this Indemnity Bond.');
 
@@ -275,9 +328,18 @@ const generateIndemnityPDF = (data, bondId) => {
 
       doc.moveDown(0.4);
       subHead('B. SELLER (INDEMNITY HOLDER) DETAILS');
-      bullet(`Seller / Indemnity Holder Name: ${safe(data.holderName)}`);
-      bullet(`Father\u2019s Full Name: ${safe(data.holderFatherName)}`);
-      bullet(`Full Residential / Business Address: ${safe(data.holderAddress)}`);
+      bulletInline([
+        { text: 'Seller / Indemnity Holder Name: ', dyn: false },
+        { text: safe(data.holderName), dyn: true },
+      ]);
+      bulletInline([
+        { text: 'Father\u2019s Full Name: ', dyn: false },
+        { text: safe(data.holderFatherName), dyn: true },
+      ]);
+      bulletInline([
+        { text: 'Full Residential / Business Address: ', dyn: false },
+        { text: safe(data.holderAddress), dyn: true },
+      ]);
 
       doc.moveDown(0.4);
       subHead('C. TRANSACTION & VDA DETAILS');
@@ -454,7 +516,11 @@ const generateIndemnityPDF = (data, bondId) => {
       doc.moveDown(0.4);
       para('The Indemnifier/User hereby unequivocally, voluntarily, and irrevocably admits, acknowledges, and confirms that he/she has been clearly informed, expressly warned, and has fully understood the risks associated with Virtual Digital Asset (VDA) transactions, including but not limited to risks arising from frauds, scams, cheating, impersonation, social engineering, fake companies, fake websites, mobile applications, investment schemes, agents, intermediaries, friends, relatives, acquaintances, online contacts, marriage proposals, romance or love inducements, employment offers, or any similar representation or assurance made by any third party.');
       doc.moveDown(0.3);
-      para(`The Indemnifier/User expressly acknowledges that ${safe(data.holderName)}, acting solely as Seller and Indemnity Holder, is limited only to the sale and release of VDA to the User\u2019s KuCoin wallet, and has no role, control, influence, advisory duty, fiduciary duty, or responsibility whatsoever over any subsequent use, transfer, storage, sale, withdrawal, or deployment of such VDA.`);
+      inline([
+        { text: 'The Indemnifier/User expressly acknowledges that ', dyn: false },
+        { text: safe(data.holderName), dyn: true },
+        { text: ', acting solely as Seller and Indemnity Holder, is limited only to the sale and release of VDA to the User\u2019s KuCoin wallet, and has no role, control, influence, advisory duty, fiduciary duty, or responsibility whatsoever over any subsequent use, transfer, storage, sale, withdrawal, or deployment of such VDA.', dyn: false },
+      ]);
       doc.moveDown(0.3);
       para("The Indemnifier/User further agrees that once the VDA is released and credited to the User\u2019s KuCoin wallet, all risks, consequences, and outcomes automatically and irrevocably transfer to the User. Any subsequent act including but not limited to:");
       star('transferring VDA to any other wallet (personal or third-party);');
@@ -471,7 +537,11 @@ const generateIndemnityPDF = (data, bondId) => {
       star('demand refund, reversal, replacement, or compensation;');
       star('file any complaint, charge, FIR, cyber complaint, consumer case, civil suit, criminal proceeding, or regulatory claim');
       doc.moveDown(0.3);
-      para(`against ${safe(data.holderName)} (Seller / Indemnity Holder) on any ground whatsoever, including but not limited to allegation of misrepresentation, inducement, negligence, deficiency of service, unfair practice, or lack of warning.`);
+      inline([
+        { text: 'against ', dyn: false },
+        { text: safe(data.holderName), dyn: true },
+        { text: ' (Seller / Indemnity Holder) on any ground whatsoever, including but not limited to allegation of misrepresentation, inducement, negligence, deficiency of service, unfair practice, or lack of warning.', dyn: false },
+      ]);
       doc.moveDown(0.3);
       para('This waiver shall apply irrespective of whether the loss arises immediately or in the future, and irrespective of the quantum of loss.');
       doc.moveDown(0.3);
@@ -515,7 +585,7 @@ const generateIndemnityPDF = (data, bondId) => {
       para('This clause shall survive termination, expiry, cancellation, or invalidity of any related transaction and shall remain perpetual, binding, and enforceable without limitation of time.');
 
       // ── SIGNATURE PAGE ──────────────────────────────────────────────────────
-      checkY(160);
+      if (doc.y + 180 > maxY) addPage();
       doc.moveDown(1);
 
       subHead('INDEMNIFIER / BUYER');
@@ -526,11 +596,14 @@ const generateIndemnityPDF = (data, bondId) => {
       doc.moveDown(0.8);
       subHead('INDEMNITY HOLDER / SELLER');
       para('Signature:');
-      para(`Name: ${safe(data.holderName)}`);
+      inline([
+        { text: 'Name: ', dyn: false },
+        { text: safe(data.holderName), dyn: true },
+      ]);
       inline([{ text: 'Date: ' }, { text: safe(data.transactionDate), dyn: true }]);
 
       doc.moveDown(1.5);
-      checkY(80);
+      if (doc.y + 90 > maxY) addPage();
 
       // Separator
       const sepY = doc.y;
@@ -556,7 +629,7 @@ const generateIndemnityPDF = (data, bondId) => {
       // ── TRANSACTION COMPLIANCE CERTIFICATE ─────────────────────────────────
       doc.addPage();
       doc.x = M;
-      doc.y = M;
+      doc.y = HEADER_BOTTOM_Y;
 
       doc.fontSize(18).font('Helvetica-Bold').fillColor('#2563eb')
         .text('TRANSACTION COMPLIANCE CERTIFICATE', M, doc.y, { width: W, align: 'center' });
@@ -580,7 +653,7 @@ const generateIndemnityPDF = (data, bondId) => {
         doc.rect(tblX, y, tblW, rH).strokeColor('#e2e8f0').lineWidth(0.4).stroke();
         doc.fontSize(11).font('Helvetica').fillColor(BLK)
           .text(l, tblX + 8, y + 9, { width: c1 - 16 });
-        doc.fontSize(11).font('Helvetica-Bold').fillColor(BLK)
+        doc.fontSize(11).font('Helvetica').fillColor(BLK)
           .text(v, tblX + c1 + 8, y + 9, { width: c1 - 16 });
         return y + rH;
       };
@@ -606,6 +679,13 @@ const generateIndemnityPDF = (data, bondId) => {
       ty = tblRow(ty, 'PAN Number', safe(data.indemnifierPAN), false);
 
       doc.y = ty + 10;
+
+      const range = doc.bufferedPageRange();
+      for (let i = range.start; i < range.start + range.count; i++) {
+        doc.switchToPage(i);
+        drawPageHeader(doc);
+        drawPageFooter(doc);
+      }
 
       doc.end();
       stream.on('finish', () => resolve(pdfPath));
