@@ -19,6 +19,7 @@ const {
 const {
   STORAGE_ROOT,
   IMAGE_ROOT,
+  uploadBasePath,
   VIDEO_ROOT,
   PDF_ROOT,
   MERGED_ROOT,
@@ -256,9 +257,11 @@ const imageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const refId = sanitizeRefId(req.generatedRefId || req.body.refId);
     if (!refId) return cb(new Error('Invalid reference ID'), null);
-    const dir = path.join(IMAGE_ROOT, refId);
-    fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
+    const fullPath = path.join(uploadBasePath, refId);
+    if (!fs.existsSync(fullPath)) {
+      fs.mkdirSync(fullPath, { recursive: true });
+    }
+    cb(null, fullPath);
   },
   filename: (req, file, cb) => {
     const baseName = imageFieldMap[file.fieldname] || 'file';
@@ -273,11 +276,13 @@ const combinedStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const refId = sanitizeRefId(req.kycUploadRefId || req.body.refId);
     if (!refId) return cb(new Error('Invalid reference ID'), null);
-    const dir = file.fieldname === 'video'
+    const fullPath = file.fieldname === 'video'
       ? path.join(VIDEO_ROOT, refId)
-      : path.join(IMAGE_ROOT, refId);
-    fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
+      : path.join(uploadBasePath, refId);
+    if (!fs.existsSync(fullPath)) {
+      fs.mkdirSync(fullPath, { recursive: true });
+    }
+    cb(null, fullPath);
   },
   filename: (req, file, cb) => {
     const fieldMap = { ...imageFieldMap, video: 'video' };
