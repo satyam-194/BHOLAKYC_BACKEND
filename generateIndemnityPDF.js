@@ -1,6 +1,7 @@
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
+const { STORAGE_ROOT } = require('./storagePaths.js');
 
 const {
   drawPageHeader,
@@ -14,7 +15,7 @@ const safe = (v) => (v === undefined || v === null || String(v).trim() === '') ?
 const generateIndemnityPDF = (data, bondId) => {
   return new Promise((resolve, reject) => {
     try {
-      const pdfDir = path.join(__dirname, 'storage', 'indemnity_pdfs');
+      const pdfDir = path.join(STORAGE_ROOT, 'indemnity_pdfs');
       const pdfPath = path.join(pdfDir, `${bondId}.pdf`);
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
 

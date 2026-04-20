@@ -1,6 +1,7 @@
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
+const { PDF_ROOT } = require('./storagePaths.js');
 
 const {
   drawPageHeader,
@@ -39,7 +40,7 @@ function isUsableImageFile(p) {
 const generateKycPDF = (user) => {
   return new Promise((resolve, reject) => {
     try {
-      const pdfDir  = path.join(__dirname, 'storage', 'pdfs');
+      const pdfDir  = PDF_ROOT;
       const pdfPath = path.join(pdfDir, `${user.refId}.pdf`);
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
 

@@ -16,6 +16,13 @@ const {
   sanitizeAdminIndemnityBody,
   mergeIndemnityEnvDefaults
 } = require('./indemnityPayload');
+const {
+  STORAGE_ROOT,
+  IMAGE_ROOT,
+  VIDEO_ROOT,
+  PDF_ROOT,
+  MERGED_ROOT,
+} = require('./storagePaths.js');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -23,8 +30,8 @@ const MONGO_URI      = process.env.MONGO_URI       || 'mongodb://localhost:27017
 const ADMIN_USERNAME = (process.env.ADMIN_USERNAME ?? 'admin').trim();
 const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD ?? 'admin1234').trim();
 
-/** Always allowed production frontend (apex); merge with comma-separated ALLOWED_ORIGIN from env. */
-const STATIC_ALLOWED_ORIGINS = ['https://coinora.in'];
+/** Production frontends: apex and www are different origins — allow both. */
+const STATIC_ALLOWED_ORIGINS = ['https://coinora.in', 'https://www.coinora.in'];
 const envOrigins = (process.env.ALLOWED_ORIGIN || 'http://localhost:3000')
   .split(',')
   .map((s) => s.trim())
@@ -42,12 +49,6 @@ const corsOrigin = (origin, callback) => {
   callback(null, false);
 };
 
-const STORAGE_ROOT = path.join(__dirname, 'storage');
-const IMAGE_ROOT   = path.join(STORAGE_ROOT, 'images');
-const VIDEO_ROOT   = path.join(STORAGE_ROOT, 'videos');
-const PDF_ROOT     = path.join(STORAGE_ROOT, 'pdfs');
-const MERGED_ROOT  = path.join(STORAGE_ROOT, 'merged');
-
 [STORAGE_ROOT, IMAGE_ROOT, VIDEO_ROOT, PDF_ROOT, MERGED_ROOT].forEach((dir) => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
@@ -59,8 +60,8 @@ app.use(
 );
 app.use(cors({
   origin: corsOrigin,
-  methods: ['GET', 'POST', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'X-Requested-With', 'X-Admin-Token'],
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'X-Requested-With', 'X-Admin-Token', 'Accept'],
   credentials: true
 }));
 app.use(express.json({ limit: '128kb' }));
