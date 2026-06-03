@@ -213,7 +213,7 @@ const AdminIndemnityBond = mongoose.model('AdminIndemnityBond', adminIndemnityBo
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
 const ALLOWED_VIDEO_TYPES = ['video/webm', 'video/mp4'];
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-const MAX_VIDEO_SIZE = 50 * 1024 * 1024;
+const MAX_VIDEO_SIZE = 200 * 1024 * 1024;
 
 const imageFileFilter = (req, file, cb) => {
   if (ALLOWED_IMAGE_TYPES.includes(file.mimetype)) {
@@ -850,7 +850,7 @@ app.delete('/api/admin/delete-user/:userId', async (req, res) => {
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ error: 'File too large. Max 5 MB for images, 50 MB for video.' });
+      return res.status(400).json({ error: 'File too large. Max 5 MB for images, 200 MB for video.' });
     }
     return res.status(400).json({ error: err.message });
   }
