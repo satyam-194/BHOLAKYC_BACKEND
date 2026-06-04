@@ -330,12 +330,47 @@ function sanitizeMergeInputPath(input) {
   return s;
 }
 
+/** Safe relative path for admin downloads: PDFs or videos inside known subdirs only. */
+function sanitizeDownloadPath(input) {
+  const s = sanitizeString(input, 300).replace(/\\/g, '/').replace(/^\/+/, '');
+  if (s.includes('..')) return null;
+  const isPdf = /^(pdfs|indemnity_pdfs|merged)\/[A-Za-z0-9][A-Za-z0-9_.-]*\.pdf$/i.test(s);
+  const isVideo = /^videos\/[A-Za-z0-9][A-Za-z0-9_-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\.(webm|mp4)$/i.test(s);
+  if (!isPdf && !isVideo) return null;
+  return s;
+}
+
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many login attempts. Try again in 15 minutes.' }
+});
+
+const downloadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.get('/api/admin/download', downloadLimiter, (req, res) => {
+  const relativeFilePath = sanitizeDownloadPath(String(req.query.path || ''));
+  if (!relativeFilePath) {
+    return res.status(400).json({ error: 'Invalid or missing path.' });
+  }
+  const absoluteFilePath = path.join(STORAGE_ROOT, relativeFilePath);
+  if (!fs.existsSync(absoluteFilePath)) {
+    return res.status(404).json({ error: 'File not found.' });
+  }
+  const ext = path.extname(absoluteFilePath).toLowerCase();
+  const mimeMap = { '.pdf': 'application/pdf', '.webm': 'video/webm', '.mp4': 'video/mp4' };
+  const contentType = mimeMap[ext] || 'application/octet-stream';
+  const filename = path.basename(absoluteFilePath);
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Type', contentType);
+  fs.createReadStream(absoluteFilePath).pipe(res);
 });
 
 app.get('/api/admin/indemnity-bond/fields', (req, res) => {
