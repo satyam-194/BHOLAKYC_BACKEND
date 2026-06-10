@@ -376,8 +376,9 @@ app.get('/api/admin/download', downloadLimiter, (req, res) => {
   const ext = path.extname(absoluteFilePath).toLowerCase();
   const mimeMap = { '.pdf': 'application/pdf', '.webm': 'video/webm', '.mp4': 'video/mp4' };
   const contentType = mimeMap[ext] || 'application/octet-stream';
-  const filename = path.basename(absoluteFilePath);
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  const rawName = String(req.query.filename || '').trim().slice(0, 200);
+  const safeFilename = rawName.replace(/[^\w.\- ]/g, '_') || path.basename(absoluteFilePath);
+  res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
   res.setHeader('Content-Type', contentType);
   fs.createReadStream(absoluteFilePath).pipe(res);
 });
