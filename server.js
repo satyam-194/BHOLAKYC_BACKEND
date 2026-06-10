@@ -72,6 +72,7 @@ app.use('/storage', (req, res, next) => {
   const origin = req.headers.origin;
   if (origin && (allowedOrigins.includes(origin) || isLocalDevOrigin(origin))) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Vary', 'Origin');
   }
   if (req.method === 'OPTIONS') return res.sendStatus(204);
