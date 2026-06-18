@@ -61,7 +61,7 @@ app.use(
 );
 app.use(cors({
   origin: corsOrigin,
-  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'X-Requested-With', 'X-Admin-Token', 'Accept'],
   credentials: true
 }));
@@ -584,6 +584,96 @@ const phase1Limiter = rateLimit({
   legacyHeaders: false
 });
 
+const existingUserLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+app.post('/api/existing-user/lookup', existingUserLimiter, async (req, res) => {
+  try {
+    const buyer_mobile = sanitizeString(req.body.buyer_mobile, 15);
+    if (!buyer_mobile) return res.status(400).json({ error: 'Phone number required.' });
+
+    const user = await User.findOne({ buyer_mobile })
+      .select('_id buyer_full_name amount');
+
+    if (!user) return res.json({ found: false });
+
+    res.json({ found: true, id: user._id.toString(), name: user.buyer_full_name, amount: user.amount });
+  } catch (err) {
+    res.status(500).json({ error: 'Lookup failed.' });
+  }
+});
+
+const existingUserVideoStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const refId = sanitizeRefId(req.kycUploadRefId);
+    if (!refId) return cb(new Error('Invalid reference ID'), null);
+    const fullPath = path.join(VIDEO_ROOT, refId);
+    if (!fs.existsSync(fullPath)) fs.mkdirSync(fullPath, { recursive: true });
+    cb(null, fullPath);
+  },
+  filename: (req, file, cb) => {
+    const ext = ['.webm', '.mp4'].includes(path.extname(file.originalname).toLowerCase())
+      ? path.extname(file.originalname).toLowerCase()
+      : '.webm';
+    cb(null, `video${ext}`);
+  }
+});
+
+const uploadExistingUserVideo = multer({
+  storage: existingUserVideoStorage,
+  fileFilter: (req, file, cb) => {
+    if (ALLOWED_VIDEO_TYPES.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Invalid video type. Only WEBM and MP4 are allowed.'), false);
+  },
+  limits: { fileSize: MAX_VIDEO_SIZE }
+});
+
+app.post(
+  '/api/existing-user/video/:id',
+  existingUserLimiter,
+  async (req, res, next) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: 'Invalid user ID.' });
+    }
+    try {
+      const user = await User.findById(req.params.id).select('refId');
+      if (!user) {
+        return res.status(404).json({ error: 'User not found.' });
+      }
+      req.kycUploadRefId = user.refId;
+      next();
+    } catch (err) {
+      next(err);
+    }
+  },
+  uploadExistingUserVideo.single('video'),
+  async (req, res) => {
+    try {
+      const user = await User.findById(req.params.id);
+      if (!user) return res.status(404).json({ error: 'User not found.' });
+
+      const utr    = sanitizeString(req.body.utr_reference_no, 50);
+      const amount = sanitizeString(req.body.amount, 30);
+
+      if (req.file) {
+        user.path_video_verification = relPath('videos', user.refId, req.file.filename);
+      }
+      if (utr)    user.utr_reference_no = utr;
+      if (amount) user.amount           = amount;
+      user.admin_status = 'Pending';
+
+      await user.save();
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to upload video.' });
+    }
+  }
+);
+
 const PROOF_REQUIRED_PURPOSES = ['Spot Trading', 'Futures Trading', 'HOLD'];
 const VALID_Q5_VALUES = ['Spot Trading', 'Futures Trading', 'HOLD', 'Investment', 'Other'];
 
@@ -857,6 +947,34 @@ app.post('/api/admin/update-status', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update status.' });
+  }
+});
+
+const EDITABLE_USER_FIELDS = [
+  'buyer_full_name', 'buyer_email', 'buyer_mobile',
+  'buyer_aadhaar_no', 'buyer_pan_no', 'buyer_address',
+  'utr_reference_no', 'amount',
+  'q1', 'q2', 'q3', 'q4', 'q5'
+];
+
+app.put('/api/admin/update-user/:id', async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: 'Invalid user ID.' });
+    }
+    const update = {};
+    for (const field of EDITABLE_USER_FIELDS) {
+      if (req.body[field] !== undefined) {
+        update[field] = sanitizeString(req.body[field], 500);
+      }
+    }
+    if (Object.keys(update).length === 0) {
+      return res.status(400).json({ error: 'No valid fields to update.' });
+    }
+    await User.findByIdAndUpdate(req.params.id, update);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update user details.' });
   }
 });
 
