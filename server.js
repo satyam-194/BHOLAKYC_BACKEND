@@ -203,7 +203,19 @@ const userSchema = new mongoose.Schema(
     path_selfie_live:        { type: String, default: '' },
     path_video_verification: { type: String, default: '' },
     pdf_path:                { type: String, default: '' },
-    indemnity_pdf_path:      { type: String, default: '' }
+    indemnity_pdf_path:      { type: String, default: '' },
+    transactions: [
+      {
+        txn_ref:                 { type: String, default: '' },
+        utr_reference_no:        { type: String, default: '' },
+        amount:                  { type: String, default: '' },
+        path_video_verification: { type: String, default: '' },
+        pdf_path:                { type: String, default: '' },
+        indemnity_pdf_path:      { type: String, default: '' },
+        admin_status:            { type: String, default: 'Pending' },
+        execution_date:          { type: Date,   default: Date.now }
+      }
+    ]
   },
   { versionKey: false }
 );
@@ -570,7 +582,17 @@ app.get('/api/admin/user-details/:id', async (req, res) => {
       path_selfie_live:        user.path_selfie_live,
       path_video_verification: user.path_video_verification,
       pdf_path:                user.pdf_path,
-      indemnity_pdf_path:      user.indemnity_pdf_path
+      indemnity_pdf_path:      user.indemnity_pdf_path,
+      transactions:            (user.transactions || []).map(t => ({
+        txn_ref:                 t.txn_ref,
+        utr_reference_no:        t.utr_reference_no,
+        amount:                  t.amount,
+        path_video_verification: t.path_video_verification,
+        pdf_path:                t.pdf_path,
+        indemnity_pdf_path:      t.indemnity_pdf_path,
+        admin_status:            t.admin_status,
+        execution_date:          t.execution_date
+      }))
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch user details.' });
@@ -597,11 +619,24 @@ app.post('/api/existing-user/lookup', existingUserLimiter, async (req, res) => {
     if (!buyer_mobile) return res.status(400).json({ error: 'Phone number required.' });
 
     const user = await User.findOne({ buyer_mobile })
-      .select('_id buyer_full_name amount');
+      .select('_id buyer_full_name amount transactions');
 
     if (!user) return res.json({ found: false });
 
-    res.json({ found: true, id: user._id.toString(), name: user.buyer_full_name, amount: user.amount });
+    res.json({
+      found: true,
+      id: user._id.toString(),
+      name: user.buyer_full_name,
+      amount: user.amount,
+      transactions: (user.transactions || []).map(t => ({
+        txn_ref:          t.txn_ref,
+        utr_reference_no: t.utr_reference_no,
+        amount:           t.amount,
+        pdf_path:         t.pdf_path,
+        admin_status:     t.admin_status,
+        execution_date:   t.execution_date
+      }))
+    });
   } catch (err) {
     res.status(500).json({ error: 'Lookup failed.' });
   }
@@ -616,10 +651,11 @@ const existingUserVideoStorage = multer.diskStorage({
     cb(null, fullPath);
   },
   filename: (req, file, cb) => {
+    const n = req.txnIndex || 1;
     const ext = ['.webm', '.mp4'].includes(path.extname(file.originalname).toLowerCase())
       ? path.extname(file.originalname).toLowerCase()
       : '.webm';
-    cb(null, `video${ext}`);
+    cb(null, `video-R${n}${ext}`);
   }
 });
 
@@ -640,11 +676,12 @@ app.post(
       return res.status(400).json({ error: 'Invalid user ID.' });
     }
     try {
-      const user = await User.findById(req.params.id).select('refId');
+      const user = await User.findById(req.params.id).select('refId transactions');
       if (!user) {
         return res.status(404).json({ error: 'User not found.' });
       }
       req.kycUploadRefId = user.refId;
+      req.txnIndex = (user.transactions || []).length + 1;
       next();
     } catch (err) {
       next(err);
@@ -656,19 +693,90 @@ app.post(
       const user = await User.findById(req.params.id);
       if (!user) return res.status(404).json({ error: 'User not found.' });
 
-      const utr    = sanitizeString(req.body.utr_reference_no, 50);
-      const amount = sanitizeString(req.body.amount, 30);
+      const utr      = sanitizeString(req.body.utr_reference_no, 50);
+      const amount   = sanitizeString(req.body.amount, 30);
+      const txnIndex = req.txnIndex || ((user.transactions || []).length + 1);
+      const txnRef   = `${user.refId}-R${txnIndex}`;
 
-      if (req.file) {
-        user.path_video_verification = relPath('videos', user.refId, req.file.filename);
+      const videoPath = req.file
+        ? relPath('videos', user.refId, req.file.filename)
+        : '';
+
+      let pdf_path = '';
+      let indemnity_pdf_path = '';
+
+      try {
+        await generateKycPDF({
+          refId:                   txnRef,
+          buyer_full_name:         user.buyer_full_name,
+          buyer_mobile:            user.buyer_mobile,
+          buyer_email:             user.buyer_email,
+          buyer_pan_no:            user.buyer_pan_no,
+          buyer_aadhaar_no:        user.buyer_aadhaar_no,
+          utr_reference_no:        utr,
+          amount:                  amount,
+          q1: user.q1, q2: user.q2, q3: user.q3, q4: user.q4, q5: user.q5,
+          proof_status:            user.proof_status,
+          path_aadhaar_front:      absPath(user.path_aadhaar_front),
+          path_aadhaar_back:       absPath(user.path_aadhaar_back),
+          path_pan_card:           absPath(user.path_pan_card),
+          path_selfie_live:        user.path_selfie_live ? absPath(user.path_selfie_live) : '',
+          path_video_verification: videoPath ? absPath(videoPath) : '',
+          execution_date:          new Date()
+        });
+        pdf_path = `pdfs/${txnRef}.pdf`;
+      } catch (pdfErr) {
+        console.error('KYC PDF Error (transaction):', pdfErr.message);
       }
-      if (utr)    user.utr_reference_no = utr;
-      if (amount) user.amount           = amount;
-      user.admin_status = 'Pending';
+
+      try {
+        const txnUserForIndemnity = {
+          buyer_full_name:  user.buyer_full_name,
+          buyer_aadhaar_no: user.buyer_aadhaar_no,
+          buyer_pan_no:     user.buyer_pan_no,
+          buyer_address:    user.buyer_address || '',
+          buyer_mobile:     user.buyer_mobile,
+          buyer_email:      user.buyer_email,
+          amount:           amount,
+          utr_reference_no: utr,
+          q1: user.q1, q2: user.q2, q3: user.q3, q4: user.q4, q5: user.q5,
+          execution_date:   new Date()
+        };
+        await generateIndemnityPDF(buildIndemnityDataFromUser(txnUserForIndemnity), txnRef);
+        indemnity_pdf_path = `indemnity_pdfs/${txnRef}.pdf`;
+      } catch (indErr) {
+        console.error('Indemnity PDF Error (transaction):', indErr.message);
+      }
+
+      if (!user.transactions) user.transactions = [];
+      user.transactions.push({
+        txn_ref:                 txnRef,
+        utr_reference_no:        utr,
+        amount:                  amount,
+        path_video_verification: videoPath,
+        pdf_path:                pdf_path,
+        indemnity_pdf_path:      indemnity_pdf_path,
+        admin_status:            'Pending',
+        execution_date:          new Date()
+      });
 
       await user.save();
-      res.json({ success: true });
+
+      res.json({
+        success: true,
+        txn_ref: txnRef,
+        pdf_path: pdf_path,
+        transactions: user.transactions.map(t => ({
+          txn_ref:          t.txn_ref,
+          utr_reference_no: t.utr_reference_no,
+          amount:           t.amount,
+          pdf_path:         t.pdf_path,
+          admin_status:     t.admin_status,
+          execution_date:   t.execution_date
+        }))
+      });
     } catch (err) {
+      console.error('Existing user video error:', err.message);
       res.status(500).json({ error: 'Failed to upload video.' });
     }
   }
